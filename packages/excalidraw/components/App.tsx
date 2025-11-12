@@ -339,6 +339,7 @@ import { restore, restoreElements } from "../data/restore";
 import { getCenter, getDistance } from "../gesture";
 import { History } from "../history";
 import { defaultLang, getLanguage, languages, setLanguage, t } from "../i18n";
+import { getConnectionHandles } from "../renderer/interactiveScene";
 
 import {
   calculateScrollCenter,
@@ -5892,6 +5893,44 @@ class App extends React.Component<AppProps, AppState> {
     const scenePointer = viewportCoordsToSceneCoords(event, this.state);
     const { x: scenePointerX, y: scenePointerY } = scenePointer;
 
+    // Check for connection handle hover
+    if (
+      !this.state.newElement &&
+      !this.state.selectionElement &&
+      !this.state.selectedElementsAreBeingDragged
+    ) {
+      const selectedElements = this.scene.getSelectedElements(this.state);
+      if (
+        selectedElements.length === 1 &&
+        isBindableElement(selectedElements[0]) &&
+        !selectedElements[0].locked
+      ) {
+        const handles = getConnectionHandles(
+          selectedElements[0],
+          this.scene.getNonDeletedElementsMap(),
+        );
+        const handleHitRadius = 15 / this.state.zoom.value;
+        let hoveredHandleId: string | null = null;
+
+        for (const handle of handles) {
+          const distance = Math.sqrt(
+            Math.pow(scenePointerX - handle.x, 2) +
+              Math.pow(scenePointerY - handle.y, 2),
+          );
+          if (distance <= handleHitRadius) {
+            hoveredHandleId = `${handle.elementId}-${handle.direction}`;
+            break;
+          }
+        }
+
+        if (hoveredHandleId !== this.state.hoveredConnectionHandleId) {
+          this.setState({ hoveredConnectionHandleId: hoveredHandleId });
+        }
+      } else if (this.state.hoveredConnectionHandleId) {
+        this.setState({ hoveredConnectionHandleId: null });
+      }
+    }
+
     if (
       !this.state.newElement &&
       isActiveToolNonLinearSnappable(this.state.activeTool.type)
@@ -6671,6 +6710,124 @@ class App extends React.Component<AppProps, AppState> {
 
     this.clearSelectionIfNotUsingSelection();
     this.updateBindingEnabledOnPointerMove(event);
+
+    // Check for connection handle clicks
+    const selectedElements = this.scene.getSelectedElements(this.state);
+    if (
+      selectedElements.length === 1 &&
+      isBindableElement(selectedElements[0]) &&
+      !selectedElements[0].locked
+    ) {
+      const handles = getConnectionHandles(
+        selectedElements[0],
+        this.scene.getNonDeletedElementsMap(),
+      );
+      const sceneCoords = viewportCoordsToSceneCoords(event, this.state);
+      const handleHitRadius = 15 / this.state.zoom.value;
+
+      for (const handle of handles) {
+        const distance = Math.sqrt(
+          Math.pow(sceneCoords.x - handle.x, 2) +
+            Math.pow(sceneCoords.y - handle.y, 2),
+        );
+        if (distance <= handleHitRadius) {
+          // Start creating arrow from this handle
+          const handleId = `${handle.elementId}-${handle.direction}`;
+          
+          // Get the binding point on the element for this direction
+          const [x1, y1, x2, y2, cx, cy] = getElementAbsoluteCoords(
+            selectedElements[0],
+            this.scene.getNonDeletedElementsMap(),
+          );
+          
+          // Calculate the actual connection point on the element edge
+          let startX = cx;
+          let startY = cy;
+          switch (handle.direction) {
+            case "north":
+              startY = y1;
+              break;
+            case "south":
+              startY = y2;
+              break;
+            case "east":
+              startX = x2;
+              break;
+            case "west":
+              startX = x1;
+              break;
+          }
+
+          this.setState({
+            hoveredConnectionHandleId: null,
+            activeTool: updateActiveTool(this.state, {
+              type: TOOL_TYPE.arrow,
+            }),
+          });
+
+          // Create arrow starting from the handle position
+          const { currentItemStartArrowhead, currentItemEndArrowhead } =
+            this.state;
+          const topLayerFrame = this.getTopLayerFrameAtSceneCoords({
+            x: startX,
+            y: startY,
+          });
+          
+          const arrowElement = newArrowElement({
+            type: "arrow",
+            x: startX,
+            y: startY,
+            width: 0,
+            height: 0,
+            points: [
+              [0, 0],
+              [0, 0],
+            ],
+            strokeColor: this.state.currentItemStrokeColor,
+            backgroundColor: this.state.currentItemBackgroundColor,
+            fillStyle: this.state.currentItemFillStyle,
+            strokeWidth: this.state.currentItemStrokeWidth,
+            strokeStyle: this.state.currentItemStrokeStyle,
+            roughness: this.state.currentItemRoughness,
+            opacity: this.state.currentItemOpacity,
+            roundness: null,
+            seed: randomInteger(),
+            versionNonce: randomInteger(),
+            startArrowhead: currentItemStartArrowhead,
+            endArrowhead: currentItemEndArrowhead,
+            elbowed: this.state.currentItemArrowType === ARROW_TYPE.elbow,
+            fixedSegments:
+              this.state.currentItemArrowType === ARROW_TYPE.elbow ? [] : null,
+            frameId: topLayerFrame ? topLayerFrame.id : null,
+          });
+
+          this.scene.replaceAllElements([
+            ...this.scene.getElementsIncludingDeleted(),
+            arrowElement,
+          ]);
+
+          // Bind the arrow to the element after it's in the scene
+          bindOrUnbindLinearElements(
+            arrowElement,
+            selectedElements[0],
+            null,
+            this.scene,
+          );
+
+          this.setState({
+            selectedElementIds: makeNextSelectedElementIds(
+              { [arrowElement.id]: true },
+              this.state,
+            ),
+            newElement: arrowElement,
+            startBoundElement: selectedElements[0],
+          });
+
+          // Let the normal drag flow handle the rest
+          return;
+        }
+      }
+    }
 
     if (this.handleSelectionOnPointerDown(event, pointerDownState)) {
       return;

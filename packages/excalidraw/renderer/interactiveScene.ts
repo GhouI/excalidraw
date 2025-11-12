@@ -30,6 +30,7 @@ import {
   isLinearElement,
   isLineElement,
   isTextElement,
+  isBindableElement,
 } from "@excalidraw/element";
 
 import { renderSelectionElement } from "@excalidraw/element";
@@ -155,6 +156,132 @@ const highlightPoint = <Point extends LocalPoint | GlobalPoint>(
     LinearElementEditor.POINT_HANDLE_SIZE / appState.zoom.value,
     false,
   );
+};
+
+type ConnectionHandle = {
+  x: number;
+  y: number;
+  direction: "north" | "south" | "east" | "west";
+  elementId: string;
+};
+
+const CONNECTION_HANDLE_SIZE = 12;
+const CONNECTION_HANDLE_OFFSET = 20;
+
+const renderConnectionHandle = (
+  context: CanvasRenderingContext2D,
+  handle: ConnectionHandle,
+  appState: InteractiveCanvasAppState,
+  isHovered: boolean,
+) => {
+  context.save();
+  context.translate(appState.scrollX, appState.scrollY);
+
+  const size = CONNECTION_HANDLE_SIZE / appState.zoom.value;
+  const halfSize = size / 2;
+  const arrowSize = halfSize * 0.7;
+
+  // Draw circle background first
+  context.fillStyle = "#ffffff";
+  context.strokeStyle = isHovered ? "#6965db" : "#c4c4c4";
+  context.lineWidth = (isHovered ? 2 : 1) / appState.zoom.value;
+  context.beginPath();
+  context.arc(handle.x, handle.y, size * 0.8, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+
+  // Draw arrow icon on top
+  context.fillStyle = isHovered ? "#6965db" : "#6965db";
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = 1 / appState.zoom.value;
+  context.beginPath();
+  
+  switch (handle.direction) {
+    case "north":
+      context.moveTo(handle.x, handle.y - arrowSize);
+      context.lineTo(handle.x - arrowSize * 0.7, handle.y + arrowSize * 0.3);
+      context.lineTo(handle.x + arrowSize * 0.7, handle.y + arrowSize * 0.3);
+      break;
+    case "south":
+      context.moveTo(handle.x, handle.y + arrowSize);
+      context.lineTo(handle.x - arrowSize * 0.7, handle.y - arrowSize * 0.3);
+      context.lineTo(handle.x + arrowSize * 0.7, handle.y - arrowSize * 0.3);
+      break;
+    case "east":
+      context.moveTo(handle.x + arrowSize, handle.y);
+      context.lineTo(handle.x - arrowSize * 0.3, handle.y - arrowSize * 0.7);
+      context.lineTo(handle.x - arrowSize * 0.3, handle.y + arrowSize * 0.7);
+      break;
+    case "west":
+      context.moveTo(handle.x - arrowSize, handle.y);
+      context.lineTo(handle.x + arrowSize * 0.3, handle.y - arrowSize * 0.7);
+      context.lineTo(handle.x + arrowSize * 0.3, handle.y + arrowSize * 0.7);
+      break;
+  }
+  context.closePath();
+  context.fill();
+  context.stroke();
+
+  context.restore();
+};
+
+export const getConnectionHandles = (
+  element: NonDeleted<ExcalidrawBindableElement>,
+  elementsMap: ElementsMap,
+): ConnectionHandle[] => {
+  const [x1, y1, x2, y2, cx, cy] = getElementAbsoluteCoords(
+    element,
+    elementsMap,
+  );
+  const width = x2 - x1;
+  const height = y2 - y1;
+  const offset = CONNECTION_HANDLE_OFFSET;
+
+  return [
+    {
+      x: cx,
+      y: y1 - offset,
+      direction: "north" as const,
+      elementId: element.id,
+    },
+    {
+      x: cx,
+      y: y2 + offset,
+      direction: "south" as const,
+      elementId: element.id,
+    },
+    {
+      x: x2 + offset,
+      y: cy,
+      direction: "east" as const,
+      elementId: element.id,
+    },
+    {
+      x: x1 - offset,
+      y: cy,
+      direction: "west" as const,
+      elementId: element.id,
+    },
+  ];
+};
+
+const renderConnectionHandles = (
+  context: CanvasRenderingContext2D,
+  element: NonDeleted<ExcalidrawBindableElement>,
+  elementsMap: ElementsMap,
+  appState: InteractiveCanvasAppState,
+  hoveredHandleId: string | null,
+) => {
+  const handles = getConnectionHandles(element, elementsMap);
+  handles.forEach((handle) => {
+    const handleId = `${handle.elementId}-${handle.direction}`;
+    renderConnectionHandle(
+      context,
+      handle,
+      appState,
+      hoveredHandleId === handleId,
+    );
+  });
 };
 
 const renderSingleLinearPoint = <Point extends GlobalPoint | LocalPoint>(
@@ -1052,6 +1179,23 @@ const _renderInteractiveScene = ({
           appState,
           transformHandles,
           selectedElements[0].angle,
+        );
+      }
+
+      // Render connection handles for bindable elements
+      if (
+        !appState.viewModeEnabled &&
+        isBindableElement(selectedElements[0]) &&
+        !selectedElements[0].locked &&
+        !isTextElement(appState.editingTextElement) &&
+        !appState.croppingElementId
+      ) {
+        renderConnectionHandles(
+          context,
+          selectedElements[0],
+          elementsMap,
+          appState,
+          appState.hoveredConnectionHandleId || null,
         );
       }
 
